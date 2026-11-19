@@ -1,0 +1,15 @@
+{
+  "name": "Liquid Glass Logo Studio",
+  "short_name": "Glass Studio",
+  "description": "Crie logos com efeito Liquid Glass.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fafafa",
+  "theme_color": "#f7f7f8",
+  "icons": [
+    {"src":"./icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"./icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"}
+  ]
+}
