@@ -129,41 +129,78 @@ function addLens(s){if(lenses.length>=MAX_LENSES){showToast('Limite de 12 elemen
 function removeLens(s){let i=-1;for(let j=lenses.length-1;j>=0;j--){if(lenses[j].shape===s){i=j;break;}}if(i<0){showToast(s===0?'Não há círculos para remover':'Não há quadrados para remover');return;}if(lenses.length===1){showToast('Mantenha pelo menos um elemento na tela');return;}lenses.splice(i,1);selectLens(Math.min(activeLens,lenses.length-1));showToast(s===0?'Círculo removido':'Quadrado removido');}
 function chooseFile(file){if(!file)return;if(!/^image\/(png|jpeg|webp|svg\+xml)$/.test(file.type)){showToast('Escolha uma imagem PNG, JPG, WebP ou SVG');return;}if(logoUrl)URL.revokeObjectURL(logoUrl);logoUrl=URL.createObjectURL(file);const img=new Image();img.onload=()=>{logo=img;const r=canvas.getBoundingClientRect();paintBackground(r.width,r.height,dpr);uploadTexture();showToast('Logo adicionada');};img.onerror=()=>showToast('Não foi possível abrir essa imagem');img.src=logoUrl;}
 function savePNG(){
+  const lens=lenses[activeLens];
+  if(!lens){showToast('Selecione uma lente para exportar');return;}
+  if(!gl||!program){showToast('O efeito ainda não está pronto');return;}
+
+  // Renderiza somente a lente selecionada. Assim, outras lentes não entram
+  // acidentalmente no arquivo exportado.
+  const lensData=new Float32Array(MAX_LENSES*4);
+  const shapeData=new Int32Array(MAX_LENSES);
+  lensData.set([lens.x,lens.y,120*dpr*lens.scale,1],0);
+  shapeData[0]=lens.shape;
+  gl.useProgram(program);
+  gl.uniform1i(gl.getUniformLocation(program,'uLensCount'),1);
+  gl.uniform4fv(gl.getUniformLocation(program,'uLensData[0]'),lensData);
+  gl.uniform1iv(gl.getUniformLocation(program,'uShapeData[0]'),shapeData);
+  gl.drawArrays(gl.TRIANGLES,0,3);
   gl.finish();
+
   const w=canvas.width,h=canvas.height;
   const pixels=new Uint8Array(w*h*4);
   gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+
   const frameCanvas=document.createElement('canvas');
   frameCanvas.width=w;frameCanvas.height=h;
-  const frameCtx=frameCanvas.getContext('2d');
+  const frameCtx=frameCanvas.getContext('2d',{willReadFrequently:true});
   const imageData=frameCtx.createImageData(w,h);
   const rowBytes=w*4;
   for(let y=0;y<h;y++){
-    const src=(h-1-y)*rowBytes;
-    imageData.data.set(pixels.subarray(src,src+rowBytes),y*rowBytes);
+    const sourceRow=(h-1-y)*rowBytes;
+    imageData.data.set(pixels.subarray(sourceRow,sourceRow+rowBytes),y*rowBytes);
   }
   frameCtx.putImageData(imageData,0,0);
-  const size=Math.max(2,Math.round(240*dpr*lensScale));
-  const centerX=px,centerY=h-py;
-  const sx=Math.max(0,Math.min(w-size,Math.round(centerX-size/2)));
-  const sy=Math.max(0,Math.min(h-size,Math.round(centerY-size/2)));
+
+  // Margem transparente evita cortar a borda orgânica da refração.
+  const diameter=240*dpr*lens.scale;
+  const cropSide=Math.max(2,Math.ceil(diameter*1.16));
   const out=document.createElement('canvas');
-  const outSize=size*2;out.width=outSize;out.height=outSize;
+  const outSize=Math.max(2,Math.round(cropSide*2));
+  out.width=outSize;out.height=outSize;
   const ctx=out.getContext('2d');
-  ctx.drawImage(frameCanvas,sx,sy,size,size,0,0,outSize,outSize);
+  const centerX=lens.x,centerY=h-lens.y;
+  const scale=outSize/cropSide;
+  ctx.drawImage(
+    frameCanvas,
+    (cropSide/2-centerX)*scale,
+    (cropSide/2-centerY)*scale,
+    w*scale,
+    h*scale
+  );
+
+  // A máscara alpha recorta a própria lente. O restante do PNG fica
+  // realmente transparente (alpha 0), sem fundo branco ou quadriculado.
+  const lensSide=outSize/1.16;
   ctx.globalCompositeOperation='destination-in';
   ctx.beginPath();
-  if(shape===0)ctx.arc(outSize/2,outSize/2,outSize/2,0,Math.PI*2);
-  else ctx.roundRect(0,0,outSize,outSize,outSize*.122);
+  if(lens.shape===0){
+    ctx.arc(outSize/2,outSize/2,lensSide/2,0,Math.PI*2);
+  }else{
+    const radius=lensSide*.12;
+    ctx.roundRect((outSize-lensSide)/2,(outSize-lensSide)/2,lensSide,lensSide,radius);
+  }
   ctx.fill();
   ctx.globalCompositeOperation='source-over';
+
   out.toBlob(blob=>{
     if(!blob){showToast('Falha ao preparar o PNG');return;}
     const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;a.download='liquid-glass-logo.png';
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=lens.shape===0?'liquid-glass-circle.png':'liquid-glass-square.png';
     document.body.appendChild(a);a.click();a.remove();
     setTimeout(()=>URL.revokeObjectURL(url),2000);
-    showToast('PNG exportado com transparência');
+    showToast('PNG transparente exportado');
   },'image/png');
 }
 function init(){gl=canvas.getContext('webgl2',{alpha:false,antialias:false,depth:false,stencil:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});if(!gl){document.getElementById('fallback').style.display='flex';return;}const vs=shader(gl.VERTEX_SHADER,VERT),fs=shader(gl.FRAGMENT_SHADER,FRAG);if(!vs||!fs)return;program=gl.createProgram();gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);gl.deleteShader(vs);gl.deleteShader(fs);if(!gl.getProgramParameter(program,gl.LINK_STATUS)){console.error(gl.getProgramInfoLog(program));return;}gl.useProgram(program);texture=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.uniform1i(gl.getUniformLocation(program,'uTex'),0);gl.uniform1f(gl.getUniformLocation(program,'uMag'),1.12);gl.uniform1f(gl.getUniformLocation(program,'uRefract'),.55);gl.uniform1f(gl.getUniformLocation(program,'uFrost'),.18);gl.uniform1f(gl.getUniformLocation(program,'uBgLum'),.99);gl.uniform1i(gl.getUniformLocation(program,'uAccentCount'),4);const colors=new Float32Array(12);accents.forEach((a,i)=>colors.set(hexRgb(a),i*3));gl.uniform3fv(gl.getUniformLocation(program,'uAccents[0]'),colors);resize();const ro=new ResizeObserver(resize);ro.observe(stage);window.addEventListener('orientationchange',()=>setTimeout(resize,250));canvas.addEventListener('wheel',wheelZoom,{passive:false});canvas.addEventListener('pointermove',move);canvas.addEventListener('pointerdown',down);canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);now=performance.now()/1000;t0=prev=now;raf=requestAnimationFrame(frame);}
